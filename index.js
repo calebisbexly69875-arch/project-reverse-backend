@@ -4,15 +4,15 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const bcrypt = require("bcryptjs");
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
 
 const app = express();
 const port = process.env.PORT || 3000;
+
 app.use(express.json());
 
 const usersFile = path.join(__dirname, "users.json");
 
-// Create users.json if it does not exist
 if (!fs.existsSync(usersFile)) {
   fs.writeFileSync(usersFile, JSON.stringify([], null, 2));
 }
@@ -29,12 +29,12 @@ function saveUsers(users) {
   fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
 }
 
-// Backend test page
+// Website/backend test route
 app.get("/", (req, res) => {
   res.send("Project Reverse Auth Backend is running!");
 });
 
-// Emulator login endpoint
+// WPF launcher login route
 app.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
@@ -75,13 +75,15 @@ app.post("/login", async (req, res) => {
   });
 });
 
-// Discord bot setup
+// Discord bot
 const bot = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages
+  ],
+  partials: [Partials.Channel]
 });
 
 const signupSessions = {};
@@ -91,26 +93,27 @@ bot.on("messageCreate", async (message) => {
 
   const userId = message.author.id;
   const content = message.content.trim();
+  const isDM = message.channel.type === 1;
 
-  // Test command
+  // Ping test
   if (content === "!ping") {
     message.reply("Pong!");
     return;
   }
 
-  // Start signup
-  if (content === "!signup") {
+  // Public/server signup command
+  if (content === "!signup" && !isDM) {
     const users = loadUsers();
 
     const alreadySignedUp = users.find(u => u.discordId === userId);
 
     if (alreadySignedUp) {
-      message.reply("You already signed up. Use `!credentials` to see your username.");
-      return;
-    }
-
-    if (signupSessions[userId]) {
-      message.reply("You are already signing up. Please finish the current step.");
+      message.reply("You already have a Project Reverse account. Check your DMs for your username.");
+      try {
+        await message.author.send(`Your Project Reverse username is: **${alreadySignedUp.username}**`);
+      } catch {
+        message.reply("I could not DM you. Please enable DMs from server members.");
+      }
       return;
     }
 
@@ -118,24 +121,62 @@ bot.on("messageCreate", async (message) => {
       step: "username"
     };
 
-    message.reply("Please provide your username for signup.");
+    try {
+      await message.author.send(
+        "Welcome to Project Reverse signup.\n\nPlease reply with the username you want to use."
+      );
+
+      message.reply("Check your DMs to finish signup.");
+    } catch {
+      message.reply("I could not DM you. Please enable DMs from server members, then run `!signup` again.");
+      delete signupSessions[userId];
+    }
+
     return;
   }
 
-  // Show username only
+  // DM signup command
+  if (content === "!signup" && isDM) {
+    const users = loadUsers();
+
+    const alreadySignedUp = users.find(u => u.discordId === userId);
+
+    if (alreadySignedUp) {
+      message.reply(`You already have an account.\nUsername: **${alreadySignedUp.username}**`);
+      return;
+    }
+
+    signupSessions[userId] = {
+      step: "username"
+    };
+
+    message.reply("Please reply with the username you want to use.");
+    return;
+  }
+
+  // Credentials command
   if (content === "!credentials") {
     const users = loadUsers();
 
     const user = users.find(u => u.discordId === userId);
 
     if (!user) {
-      message.reply("You have not signed up yet. Type `!signup` first.");
+      message.reply("You have not signed up yet. Type `!signup` in the server first.");
       return;
     }
 
-    message.reply(
-      `Your Project Reverse account:\nUsername: **${user.username}**\nPassword: **hidden for security**`
-    );
+    try {
+      await message.author.send(
+        `Your Project Reverse account:\nUsername: **${user.username}**\nPassword: **hidden for security**`
+      );
+
+      if (!isDM) {
+        message.reply("I sent your account info in DMs.");
+      }
+    } catch {
+      message.reply("I could not DM you. Please enable DMs from server members.");
+    }
+
     return;
   }
 
@@ -148,12 +189,20 @@ bot.on("messageCreate", async (message) => {
     return;
   }
 
+  // Only continue signup steps inside DMs
+  if (!isDM) return;
+
   // Username step
   if (signupSessions[userId] && signupSessions[userId].step === "username") {
     const username = content;
 
     if (username.length < 3) {
       message.reply("Username must be at least 3 characters. Try again.");
+      return;
+    }
+
+    if (username.length > 20) {
+      message.reply("Username must be 20 characters or less. Try again.");
       return;
     }
 
@@ -176,7 +225,7 @@ bot.on("messageCreate", async (message) => {
     signupSessions[userId].username = username;
     signupSessions[userId].step = "password";
 
-    message.reply("Please provide your password.");
+    message.reply("Now reply with the password you want to use.");
     return;
   }
 
@@ -190,9 +239,17 @@ bot.on("messageCreate", async (message) => {
       return;
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
-
     const users = loadUsers();
+
+    const alreadySignedUp = users.find(u => u.discordId === userId);
+
+    if (alreadySignedUp) {
+      delete signupSessions[userId];
+      message.reply("You already have an account.");
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
 
     users.push({
       discordId: userId,
@@ -206,7 +263,7 @@ bot.on("messageCreate", async (message) => {
     delete signupSessions[userId];
 
     message.reply(
-      `Signup successful for **${username}**!\nYou can now log in to the Project Reverse emulator with that username and password.`
+      `Signup successful!\n\nUsername: **${username}**\nPassword: **hidden for security**\n\nYou can now log in to the Project Reverse launcher.`
     );
 
     return;
