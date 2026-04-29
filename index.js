@@ -270,11 +270,28 @@ bot.on("messageCreate", async (message) => {
   }
 });
 
-bot.once("clientReady", () => {
-  console.log("Bot is online and ready!");
+bot.once("clientReady", (client) => {
+  console.log(`✅ Bot is online and ready as ${client.user.tag}`);
 });
 
-bot.login(process.env.BOT_TOKEN);
+bot.login(process.env.BOT_TOKEN)
+  .then(() => {
+    console.log("✅ Discord login request succeeded.");
+  })
+  .catch((err) => {
+    console.error("❌ Discord bot login failed:");
+    console.error(err);
+  });
+
+bot.on("error", (err) => {
+  console.error("❌ Discord client error:");
+  console.error(err);
+});
+
+bot.on("shardError", (err) => {
+  console.error("❌ Discord shard error:");
+  console.error(err);
+});
 
 app.listen(port, () => {
   console.log(`Backend running on http://localhost:${port}`);
