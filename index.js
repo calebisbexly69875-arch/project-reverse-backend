@@ -1,5 +1,8 @@
 require("dotenv").config();
 
+console.log("=== PROJECT REVERSE BACKEND STARTING ===");
+console.log("BOT_TOKEN exists:", !!process.env.BOT_TOKEN);
+
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -29,50 +32,59 @@ function saveUsers(users) {
   fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
 }
 
-// Website/backend test route
+// Backend test route
 app.get("/", (req, res) => {
   res.send("Project Reverse Auth Backend is running!");
 });
 
 // WPF launcher login route
 app.post("/login", async (req, res) => {
-  const { username, password } = req.body;
+  try {
+    const { username, password } = req.body;
 
-  if (!username || !password) {
-    return res.status(400).json({
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing username or password"
+      });
+    }
+
+    const users = loadUsers();
+
+    const user = users.find(
+      u => u.username.toLowerCase() === username.toLowerCase()
+    );
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid username or password"
+      });
+    }
+
+    const passwordMatches = await bcrypt.compare(password, user.passwordHash);
+
+    if (!passwordMatches) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid username or password"
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Login successful",
+      username: user.username,
+      discordId: user.discordId
+    });
+  } catch (err) {
+    console.error("Login route error:", err);
+
+    return res.status(500).json({
       success: false,
-      message: "Missing username or password"
+      message: "Server error"
     });
   }
-
-  const users = loadUsers();
-
-  const user = users.find(
-    u => u.username.toLowerCase() === username.toLowerCase()
-  );
-
-  if (!user) {
-    return res.status(401).json({
-      success: false,
-      message: "Invalid username or password"
-    });
-  }
-
-  const passwordMatches = await bcrypt.compare(password, user.passwordHash);
-
-  if (!passwordMatches) {
-    return res.status(401).json({
-      success: false,
-      message: "Invalid username or password"
-    });
-  }
-
-  return res.json({
-    success: true,
-    message: "Login successful",
-    username: user.username,
-    discordId: user.discordId
-  });
 });
 
 // Discord bot
@@ -89,190 +101,234 @@ const bot = new Client({
 const signupSessions = {};
 
 bot.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+  try {
+    if (message.author.bot) return;
 
-  const userId = message.author.id;
-  const content = message.content.trim();
-  const isDM = message.channel.type === 1;
+    const userId = message.author.id;
+    const content = message.content.trim();
 
-  // Ping test
-  if (content === "!ping") {
-    message.reply("Pong!");
-    return;
-  }
+    // Discord DM channel type is 1 in discord.js
+    const isDM = message.channel.type === 1;
 
-  // Public/server signup command
-  if (content === "!signup" && !isDM) {
-    const users = loadUsers();
+    // Test command
+    if (content === "!ping") {
+      await message.reply("Pong!");
+      return;
+    }
 
-    const alreadySignedUp = users.find(u => u.discordId === userId);
+    // Server/public signup command
+    if (content === "!signup" && !isDM) {
+      const users = loadUsers();
 
-    if (alreadySignedUp) {
-      message.reply("You already have a Project Reverse account. Check your DMs for your username.");
+      const alreadySignedUp = users.find(u => u.discordId === userId);
+
+      if (alreadySignedUp) {
+        await message.reply("You already have a Project Reverse account. I sent your username in DMs.");
+
+        try {
+          await message.author.send(
+            `Your Project Reverse username is: **${alreadySignedUp.username}**\nPassword: **hidden for security**`
+          );
+        } catch {
+          await message.reply("I could not DM you. Please enable DMs from server members.");
+        }
+
+        return;
+      }
+
+      signupSessions[userId] = {
+        step: "username"
+      };
+
       try {
-        await message.author.send(`Your Project Reverse username is: **${alreadySignedUp.username}**`);
+        await message.author.send(
+          "Welcome to Project Reverse signup.\n\nReply with the username you want to use."
+        );
+
+        await message.reply("Check your DMs to finish signup.");
       } catch {
-        message.reply("I could not DM you. Please enable DMs from server members.");
+        delete signupSessions[userId];
+
+        await message.reply(
+          "I could not DM you. Please enable DMs from server members, then run `!signup` again."
+        );
       }
+
       return;
     }
 
-    signupSessions[userId] = {
-      step: "username"
-    };
+    // DM signup command
+    if (content === "!signup" && isDM) {
+      const users = loadUsers();
 
-    try {
-      await message.author.send(
-        "Welcome to Project Reverse signup.\n\nPlease reply with the username you want to use."
+      const alreadySignedUp = users.find(u => u.discordId === userId);
+
+      if (alreadySignedUp) {
+        await message.reply(
+          `You already have a Project Reverse account.\nUsername: **${alreadySignedUp.username}**\nPassword: **hidden for security**`
+        );
+        return;
+      }
+
+      signupSessions[userId] = {
+        step: "username"
+      };
+
+      await message.reply("Reply with the username you want to use.");
+      return;
+    }
+
+    // Credentials command
+    if (content === "!credentials") {
+      const users = loadUsers();
+
+      const user = users.find(u => u.discordId === userId);
+
+      if (!user) {
+        await message.reply("You have not signed up yet. Type `!signup` first.");
+        return;
+      }
+
+      try {
+        await message.author.send(
+          `Your Project Reverse account:\nUsername: **${user.username}**\nPassword: **hidden for security**`
+        );
+
+        if (!isDM) {
+          await message.reply("I sent your account info in DMs.");
+        }
+      } catch {
+        await message.reply("I could not DM you. Please enable DMs from server members.");
+      }
+
+      return;
+    }
+
+    // Cancel signup
+    if (content === "!cancel") {
+      if (signupSessions[userId]) {
+        delete signupSessions[userId];
+        await message.reply("Signup cancelled.");
+      } else {
+        await message.reply("You are not currently signing up.");
+      }
+
+      return;
+    }
+
+    // Signup steps only happen in DMs
+    if (!isDM) return;
+
+    // Username step
+    if (signupSessions[userId] && signupSessions[userId].step === "username") {
+      const username = content;
+
+      if (username.length < 3) {
+        await message.reply("Username must be at least 3 characters. Try again.");
+        return;
+      }
+
+      if (username.length > 20) {
+        await message.reply("Username must be 20 characters or less. Try again.");
+        return;
+      }
+
+      if (username.includes(" ")) {
+        await message.reply("Username cannot have spaces. Try again.");
+        return;
+      }
+
+      if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+        await message.reply("Username can only use letters, numbers, and underscores. Try again.");
+        return;
+      }
+
+      const users = loadUsers();
+
+      const usernameTaken = users.find(
+        u => u.username.toLowerCase() === username.toLowerCase()
       );
 
-      message.reply("Check your DMs to finish signup.");
-    } catch {
-      message.reply("I could not DM you. Please enable DMs from server members, then run `!signup` again.");
-      delete signupSessions[userId];
-    }
+      if (usernameTaken) {
+        await message.reply("That username is already taken. Try another one.");
+        return;
+      }
 
-    return;
-  }
+      signupSessions[userId].username = username;
+      signupSessions[userId].step = "password";
 
-  // DM signup command
-  if (content === "!signup" && isDM) {
-    const users = loadUsers();
-
-    const alreadySignedUp = users.find(u => u.discordId === userId);
-
-    if (alreadySignedUp) {
-      message.reply(`You already have an account.\nUsername: **${alreadySignedUp.username}**`);
+      await message.reply("Now reply with the password you want to use.");
       return;
     }
 
-    signupSessions[userId] = {
-      step: "username"
-    };
+    // Password step
+    if (signupSessions[userId] && signupSessions[userId].step === "password") {
+      const password = content;
+      const username = signupSessions[userId].username;
 
-    message.reply("Please reply with the username you want to use.");
-    return;
-  }
+      if (password.length < 6) {
+        await message.reply("Password must be at least 6 characters. Try again.");
+        return;
+      }
 
-  // Credentials command
-  if (content === "!credentials") {
-    const users = loadUsers();
+      const users = loadUsers();
 
-    const user = users.find(u => u.discordId === userId);
+      const alreadySignedUp = users.find(u => u.discordId === userId);
 
-    if (!user) {
-      message.reply("You have not signed up yet. Type `!signup` in the server first.");
-      return;
-    }
+      if (alreadySignedUp) {
+        delete signupSessions[userId];
 
-    try {
-      await message.author.send(
-        `Your Project Reverse account:\nUsername: **${user.username}**\nPassword: **hidden for security**`
+        await message.reply(
+          `You already have an account.\nUsername: **${alreadySignedUp.username}**`
+        );
+
+        return;
+      }
+
+      const usernameTaken = users.find(
+        u => u.username.toLowerCase() === username.toLowerCase()
       );
 
-      if (!isDM) {
-        message.reply("I sent your account info in DMs.");
+      if (usernameTaken) {
+        delete signupSessions[userId];
+
+        await message.reply("That username was just taken. Please run `!signup` again.");
+        return;
       }
-    } catch {
-      message.reply("I could not DM you. Please enable DMs from server members.");
-    }
 
-    return;
-  }
+      const passwordHash = await bcrypt.hash(password, 10);
 
-  // Cancel signup
-  if (content === "!cancel") {
-    if (signupSessions[userId]) {
+      users.push({
+        discordId: userId,
+        username: username,
+        passwordHash: passwordHash,
+        createdAt: new Date().toISOString()
+      });
+
+      saveUsers(users);
+
       delete signupSessions[userId];
-      message.reply("Signup cancelled.");
-    }
-    return;
-  }
 
-  // Only continue signup steps inside DMs
-  if (!isDM) return;
+      await message.reply(
+        `Signup successful!\n\nUsername: **${username}**\nPassword: **hidden for security**\n\nYou can now log in to the Project Reverse launcher.`
+      );
 
-  // Username step
-  if (signupSessions[userId] && signupSessions[userId].step === "username") {
-    const username = content;
-
-    if (username.length < 3) {
-      message.reply("Username must be at least 3 characters. Try again.");
       return;
     }
+  } catch (err) {
+    console.error("Message handler error:", err);
 
-    if (username.length > 20) {
-      message.reply("Username must be 20 characters or less. Try again.");
-      return;
-    }
-
-    if (username.includes(" ")) {
-      message.reply("Username cannot have spaces. Try again.");
-      return;
-    }
-
-    const users = loadUsers();
-
-    const usernameTaken = users.find(
-      u => u.username.toLowerCase() === username.toLowerCase()
-    );
-
-    if (usernameTaken) {
-      message.reply("That username is already taken. Try another one.");
-      return;
-    }
-
-    signupSessions[userId].username = username;
-    signupSessions[userId].step = "password";
-
-    message.reply("Now reply with the password you want to use.");
-    return;
-  }
-
-  // Password step
-  if (signupSessions[userId] && signupSessions[userId].step === "password") {
-    const password = content;
-    const username = signupSessions[userId].username;
-
-    if (password.length < 6) {
-      message.reply("Password must be at least 6 characters. Try again.");
-      return;
-    }
-
-    const users = loadUsers();
-
-    const alreadySignedUp = users.find(u => u.discordId === userId);
-
-    if (alreadySignedUp) {
-      delete signupSessions[userId];
-      message.reply("You already have an account.");
-      return;
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    users.push({
-      discordId: userId,
-      username: username,
-      passwordHash: passwordHash,
-      createdAt: new Date().toISOString()
-    });
-
-    saveUsers(users);
-
-    delete signupSessions[userId];
-
-    message.reply(
-      `Signup successful!\n\nUsername: **${username}**\nPassword: **hidden for security**\n\nYou can now log in to the Project Reverse launcher.`
-    );
-
-    return;
+    try {
+      await message.reply("Something went wrong. Try again.");
+    } catch {}
   }
 });
 
 bot.once("clientReady", (client) => {
   console.log(`✅ Bot is online and ready as ${client.user.tag}`);
 });
+
+console.log("Trying to login to Discord...");
 
 bot.login(process.env.BOT_TOKEN)
   .then(() => {
@@ -294,5 +350,5 @@ bot.on("shardError", (err) => {
 });
 
 app.listen(port, () => {
-  console.log(`Backend running on http://localhost:${port}`);
+  console.log(`Backend running on port ${port}`);
 });
