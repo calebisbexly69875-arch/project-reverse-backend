@@ -324,13 +324,17 @@ bot.on("messageCreate", async (message) => {
   }
 });
 
-bot.once("clientReady", (client) => {
+bot.once("ready", (client) => {
   console.log(`✅ Bot is online and ready as ${client.user.tag}`);
 });
 
 console.log("Trying to login to Discord...");
 
-bot.login(process.env.BOT_TOKEN)
+const discordToken = (process.env.BOT_TOKEN || "").trim();
+
+console.log("Token length:", discordToken.length);
+
+bot.login(discordToken)
   .then(() => {
     console.log("✅ Discord login request succeeded.");
   })
